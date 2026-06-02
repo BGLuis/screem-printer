@@ -1,0 +1,19 @@
+# Resultados e backups gerados pelo script
+screenshots/
+screenshots_backup_*/
+
+# Ambientes Virtuais (Python)
+venv/
+env/
+.venv/
+.env
+
+# Cache e arquivos compilados do Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Arquivos do Sistema Operacional
+.DS_Store
+Thumbs.db

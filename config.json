@@ -1,0 +1,78 @@
+{
+  "max_pages": 50,
+  "max_concurrent_pages": 3,
+  "delay_between_pages_seconds": 2,
+  "delay_between_resolutions_ms": 1000,
+  "resolutions": [
+    {
+      "name": "mobile_small_portrait",
+      "width": 320,
+      "height": 568
+    },
+    {
+      "name": "mobile_standard_portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "mobile_large_portrait",
+      "width": 428,
+      "height": 926
+    },
+    {
+      "name": "mobile_landscape",
+      "width": 844,
+      "height": 390
+    },
+    {
+      "name": "tablet_small_portrait",
+      "width": 768,
+      "height": 1024
+    },
+    {
+      "name": "tablet_small_landscape",
+      "width": 1024,
+      "height": 768
+    },
+    {
+      "name": "tablet_large_portrait",
+      "width": 1024,
+      "height": 1366
+    },
+    {
+      "name": "tablet_large_landscape",
+      "width": 1366,
+      "height": 1024
+    },
+    {
+      "name": "laptop_small",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "name": "laptop_standard",
+      "width": 1366,
+      "height": 768
+    },
+    {
+      "name": "desktop_full_hd",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "name": "desktop_2k",
+      "width": 2560,
+      "height": 1440
+    },
+    {
+      "name": "desktop_4k",
+      "width": 3840,
+      "height": 2160
+    },
+    {
+      "name": "desktop_ultrawide",
+      "width": 3440,
+      "height": 1440
+    }
+  ]
+}
