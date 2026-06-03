@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime
 import shutil
 import copy
+import hashlib
 
 # Carrega as configurações do arquivo config.json
 try:
@@ -33,7 +34,7 @@ def sanitize_filename(url):
     # Substitui caracteres não alfanuméricos por underline
     return re.sub(r'[^a-zA-Z0-9_]', '_', path)
 
-async def worker(worker_id, browser, base_domain, queue, visited, max_pages, active_resolutions, storage_state_path):
+async def worker(worker_id, browser, base_domain, queue, visited, max_pages, active_resolutions, storage_state_path, mode, visited_layouts):
     if storage_state_path and os.path.exists(storage_state_path):
         context = await browser.new_context(storage_state=storage_state_path)
     else:
@@ -71,17 +72,43 @@ async def worker(worker_id, browser, base_domain, queue, visited, max_pages, act
             
             try:
                 await page.goto(url_clean, wait_until="networkidle", timeout=30000)
-                page_name = sanitize_filename(url_clean)
-                page_dir = os.path.join("screenshots", page_name)
-                os.makedirs(page_dir, exist_ok=True)
                 
-                for res in active_resolutions:
-                    await page.set_viewport_size({"width": res["width"], "height": res["height"]})
-                    await page.wait_for_timeout(DELAY_BETWEEN_RESOLUTIONS)
+                # Modo 2: Auto-inteligente (Verifica o Hash Estrutural do DOM para pular layouts repetidos)
+                skip_screenshots = False
+                if mode == 2:
+                    dom_structure = await page.evaluate('''() => {
+                        function walk(node) {
+                            if (node.nodeType === Node.ELEMENT_NODE) {
+                                let res = node.tagName;
+                                for (let child of node.childNodes) {
+                                    res += walk(child);
+                                }
+                                return res;
+                            }
+                            return '';
+                        }
+                        return walk(document.body);
+                    }''')
+                    layout_hash = hashlib.md5(dom_structure.encode('utf-8')).hexdigest()
                     
-                    filepath = os.path.join(page_dir, f"{res['name']}.png")
-                    await page.screenshot(path=filepath, full_page=True)
-                    print(f"  [Worker {worker_id}] -> Screenshot salva: {filepath}")
+                    if layout_hash in visited_layouts:
+                        print(f"  [Worker {worker_id}] -> Layout repetido detectado. Pulando capturas de tela, mas buscando links.")
+                        skip_screenshots = True
+                    else:
+                        visited_layouts.add(layout_hash)
+
+                if not skip_screenshots:
+                    page_name = sanitize_filename(url_clean)
+                    page_dir = os.path.join("screenshots", page_name)
+                    os.makedirs(page_dir, exist_ok=True)
+                    
+                    for res in active_resolutions:
+                        await page.set_viewport_size({"width": res["width"], "height": res["height"]})
+                        await page.wait_for_timeout(DELAY_BETWEEN_RESOLUTIONS)
+                        
+                        filepath = os.path.join(page_dir, f"{res['name']}.png")
+                        await page.screenshot(path=filepath, full_page=True)
+                        print(f"  [Worker {worker_id}] -> Screenshot salva: {filepath}")
                 
                 links = await page.eval_on_selector_all("a", "elements => elements.map(e => e.href)")
                 
@@ -105,11 +132,108 @@ async def worker(worker_id, browser, base_domain, queue, visited, max_pages, act
     finally:
         await context.close()
 
-async def crawl_and_screenshot(start_url, max_pages=MAX_PAGES_DEFAULT, active_resolutions=None, login_required=False):
+async def guided_exploration(start_url, active_resolutions, login_required):
+    print("\n" + "="*50)
+    print("INICIANDO EXPLORAÇÃO GUIADA PELO USUÁRIO")
+    print("="*50)
+    print("- Um navegador será aberto.")
+    if login_required:
+        print("- Faça seu login normalmente.")
+    print("- Navegue pelo site, abra modais, menus laterais, etc.")
+    print("- Quando quiser tirar print da TELA ATUAL em todas as resoluções:")
+    print("   -> Clique no botão verde no canto inferior direito")
+    print("   -> OU pressione Ctrl + Espaço")
+    print("- O script irá pausar você, capturar tudo e deixar você continuar.")
+    print("- Feche o navegador quando terminar.")
+    print("="*50 + "\n")
+    
+    os.makedirs("screenshots", exist_ok=True)
+    capture_count = [1]
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context()
+        page = await context.new_page()
+        
+        async def handle_capture(source):
+            page_obj = source['page']
+            current_url = page_obj.url
+            print(f"\n[!] Iniciando captura do estado atual... (URL: {current_url})")
+            
+            try:
+                original_size = page_obj.viewport_size
+                if not original_size:
+                    original_size = {"width": 1280, "height": 720}
+                    
+                page_name = f"guiada_{capture_count[0]:03d}_" + sanitize_filename(current_url)
+                page_dir = os.path.join("screenshots", page_name)
+                os.makedirs(page_dir, exist_ok=True)
+                capture_count[0] += 1
+                
+                for res in active_resolutions:
+                    await page_obj.set_viewport_size({"width": res["width"], "height": res["height"]})
+                    await page_obj.wait_for_timeout(DELAY_BETWEEN_RESOLUTIONS)
+                    filepath = os.path.join(page_dir, f"{res['name']}.png")
+                    await page_obj.screenshot(path=filepath, full_page=True)
+                    print(f"  -> Salvo: {filepath}")
+                    
+                await page_obj.set_viewport_size(original_size)
+                print("[!] Capturas concluídas. Pode continuar explorando!")
+            except Exception as e:
+                print(f"[Erro] Falha ao capturar a tela: {e}")
+
+        await context.expose_binding("triggerCapture", lambda source: asyncio.create_task(handle_capture(source)))
+
+        init_script = """
+        if (!window.captureInjected) {
+            window.captureInjected = true;
+            
+            document.addEventListener('keydown', e => {
+                if (e.ctrlKey && e.code === 'Space') {
+                    e.preventDefault();
+                    window.triggerCapture();
+                }
+            });
+            
+            // Injeta o botão apenas após o carregamento da página para garantir que ele apareça
+            window.addEventListener('load', () => {
+                if (document.getElementById('screem-printer-btn')) return;
+                const btn = document.createElement('button');
+                btn.id = 'screem-printer-btn';
+                btn.innerHTML = '📸 Capturar Múltiplas Telas (Ctrl+Espaço)';
+                btn.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:9999999; padding:15px; background:#4CAF50; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+                btn.onclick = () => window.triggerCapture();
+                document.body.appendChild(btn);
+            });
+        }
+        """
+        await context.add_init_script(init_script)
+        
+        try:
+            await page.goto(start_url)
+            # Espera indefinidamente até que a página ou o contexto seja fechado
+            await page.wait_for_event("close", timeout=0)
+        except Exception as e:
+            if "Target closed" not in str(e) and "browser has been closed" not in str(e):
+                print(f"\nEncerrando exploração guiada. Motivo: {e}")
+            else:
+                print("\nNavegador fechado. Encerrando exploração guiada.")
+        finally:
+            if browser.is_connected():
+                await browser.close()
+            print("As imagens estão salvas na pasta 'screenshots/'.")
+
+async def crawl_and_screenshot(start_url, max_pages=MAX_PAGES_DEFAULT, active_resolutions=None, login_required=False, mode=1):
     if active_resolutions is None:
         active_resolutions = RESOLUTIONS
 
+    # Se for modo 3 (Guiado), a lógica é totalmente diferente
+    if mode == 3:
+        await guided_exploration(start_url, active_resolutions, login_required)
+        return
+
     visited = set()
+    visited_layouts = set() # Para o modo 2 (Auto-inteligente)
     queue = asyncio.Queue()
     await queue.put(start_url)
     base_domain = urlparse(start_url).netloc
@@ -150,7 +274,7 @@ async def crawl_and_screenshot(start_url, max_pages=MAX_PAGES_DEFAULT, active_re
         
         workers = []
         for i in range(MAX_CONCURRENT_PAGES):
-            task = asyncio.create_task(worker(i+1, browser, base_domain, queue, visited, max_pages, active_resolutions, storage_state_path))
+            task = asyncio.create_task(worker(i+1, browser, base_domain, queue, visited, max_pages, active_resolutions, storage_state_path, mode, visited_layouts))
             workers.append(task)
             
         # Monitora a fila para saber quando terminamos ou batemos o limite de páginas
@@ -175,7 +299,7 @@ async def crawl_and_screenshot(start_url, max_pages=MAX_PAGES_DEFAULT, active_re
             except:
                 pass
         
-        print(f"\nFim da varredura. Total de páginas processadas: {len(visited)}")
+        print(f"\nFim da varredura automática. Total de páginas processadas: {len(visited)}")
         print("As imagens estão salvas na pasta 'screenshots/'.")
 
 def menu_resolutions(active_resolutions):
@@ -221,6 +345,13 @@ def interactive_menu():
     target_url = ""
     max_pages = MAX_PAGES_DEFAULT
     login_required = False
+    mode = 1 # 1=Padrao, 2=Inteligente(Hash), 3=Guiado
+    
+    modes_desc = {
+        1: "Automático Padrão (Varre links indiscriminadamente)",
+        2: "Automático Inteligente (Evita páginas com o mesmo layout)",
+        3: "Exploração Guiada (Você navega, abre modais e decide onde tirar prints)"
+    }
     
     while True:
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -230,13 +361,15 @@ def interactive_menu():
         print(f"URL Alvo: {target_url if target_url else 'Não definida'}")
         print(f"Máximo de páginas: {max_pages}")
         print(f"Login Manual: {'Ativado' if login_required else 'Desativado'}")
+        print(f"Modo de Exploração: {modes_desc[mode]}")
         print(f"Resoluções ativas: {len(active_resolutions)} de {len(CONFIG.get('resolutions', []))}")
         print("-" * 50)
         print("[1] Definir URL alvo")
         print("[2] Configurar máximo de páginas")
         print("[3] Configurar resoluções")
         print("[4] Alternar necessidade de Login Manual")
-        print("[5] Iniciar Varredura")
+        print("[5] Alternar Modo de Exploração")
+        print("[6] Iniciar Varredura")
         print("[0] Sair")
         
         choice = input("\nEscolha uma opção: ").strip()
@@ -256,6 +389,17 @@ def interactive_menu():
             print(f"\nLogin Manual {'ativado' if login_required else 'desativado'}.")
             input("Pressione ENTER para continuar...")
         elif choice == '5':
+            print("\nModos disponíveis:")
+            for k, v in modes_desc.items():
+                print(f"[{k}] {v}")
+            m_choice = input("Escolha o modo (1, 2 ou 3): ").strip()
+            if m_choice in ['1', '2', '3']:
+                mode = int(m_choice)
+                if mode == 3 and not login_required:
+                    # O modo guiado naturalmente já é manual, mas não força a criar o state.json
+                    # Não há problema
+                    pass
+        elif choice == '6':
             if not target_url:
                 print("\nPor favor, defina a URL alvo primeiro (Opção 1).")
                 input("Pressione ENTER para continuar...")
@@ -268,7 +412,7 @@ def interactive_menu():
         elif choice == '0':
             sys.exit(0)
             
-    return target_url, max_pages, active_resolutions, login_required
+    return target_url, max_pages, active_resolutions, login_required, mode
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script para varrer um site e tirar screenshots em múltiplas resoluções.")
@@ -276,12 +420,12 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--max-pages", type=int, help="Número máximo de páginas para visitar")
     parser.add_argument("-l", "--login", action="store_true", help="Ativa o modo de login manual antes da varredura")
     parser.add_argument("-i", "--interactive", action="store_true", help="Inicia o modo interativo")
+    parser.add_argument("--mode", type=int, choices=[1, 2, 3], default=1, help="Modo de exploração: 1=Padrão, 2=Inteligente (Hash), 3=Guiado pelo Usuário")
     
     args = parser.parse_args()
     
-    # Se não passou nada ou pediu interativo, abre o modo interativo
     if args.interactive or len(sys.argv) == 1:
-        target_url, max_pages, active_resolutions, login_required = interactive_menu()
+        target_url, max_pages, active_resolutions, login_required, mode = interactive_menu()
     else:
         if not args.url:
             parser.error("A URL é obrigatória no modo CLI. Use -u <URL> ou execute sem argumentos para o modo interativo.")
@@ -289,12 +433,12 @@ if __name__ == "__main__":
         max_pages = args.max_pages if args.max_pages is not None else MAX_PAGES_DEFAULT
         active_resolutions = RESOLUTIONS
         login_required = args.login
+        mode = args.mode
     
-    # Verifica se a URL tem http/https
     if not target_url.startswith('http'):
         target_url = 'https://' + target_url
 
     try:
-        asyncio.run(crawl_and_screenshot(target_url, max_pages, active_resolutions, login_required))
+        asyncio.run(crawl_and_screenshot(target_url, max_pages, active_resolutions, login_required, mode))
     except KeyboardInterrupt:
         print("\nVarredura interrompida pelo usuário.")
