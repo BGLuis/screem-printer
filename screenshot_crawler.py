@@ -73,9 +73,9 @@ async def worker(worker_id, browser, base_domain, queue, visited, max_pages, act
             try:
                 await page.goto(url_clean, wait_until="networkidle", timeout=30000)
                 
-                # Modo 2: Auto-inteligente (Verifica o Hash Estrutural do DOM para pular layouts repetidos)
+                # Verifica o Hash Estrutural do DOM para pular layouts repetidos
                 skip_screenshots = False
-                if mode == 2:
+                if mode == 1:
                     dom_structure = await page.evaluate('''() => {
                         function walk(node) {
                             if (node.nodeType === Node.ELEMENT_NODE) {
@@ -227,13 +227,13 @@ async def crawl_and_screenshot(start_url, max_pages=MAX_PAGES_DEFAULT, active_re
     if active_resolutions is None:
         active_resolutions = RESOLUTIONS
 
-    # Se for modo 3 (Guiado), a lógica é totalmente diferente
-    if mode == 3:
+    # Se for modo 2 (Guiado), a lógica é totalmente diferente
+    if mode == 2:
         await guided_exploration(start_url, active_resolutions, login_required)
         return
 
     visited = set()
-    visited_layouts = set() # Para o modo 2 (Auto-inteligente)
+    visited_layouts = set() # Para não repetir layouts iguais
     queue = asyncio.Queue()
     await queue.put(start_url)
     base_domain = urlparse(start_url).netloc
@@ -345,12 +345,11 @@ def interactive_menu():
     target_url = ""
     max_pages = MAX_PAGES_DEFAULT
     login_required = False
-    mode = 1 # 1=Padrao, 2=Inteligente(Hash), 3=Guiado
+    mode = 1 # 1=Automático, 2=Guiado
     
     modes_desc = {
-        1: "Automático Padrão (Varre links indiscriminadamente)",
-        2: "Automático Inteligente (Evita páginas com o mesmo layout)",
-        3: "Exploração Guiada (Você navega, abre modais e decide onde tirar prints)"
+        1: "Automático Inteligente (Evita páginas repetidas com o mesmo layout)",
+        2: "Exploração Guiada (Você navega, abre modais e decide onde tirar prints)"
     }
     
     while True:
@@ -392,13 +391,9 @@ def interactive_menu():
             print("\nModos disponíveis:")
             for k, v in modes_desc.items():
                 print(f"[{k}] {v}")
-            m_choice = input("Escolha o modo (1, 2 ou 3): ").strip()
-            if m_choice in ['1', '2', '3']:
+            m_choice = input("Escolha o modo (1 ou 2): ").strip()
+            if m_choice in ['1', '2']:
                 mode = int(m_choice)
-                if mode == 3 and not login_required:
-                    # O modo guiado naturalmente já é manual, mas não força a criar o state.json
-                    # Não há problema
-                    pass
         elif choice == '6':
             if not target_url:
                 print("\nPor favor, defina a URL alvo primeiro (Opção 1).")
@@ -420,7 +415,7 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--max-pages", type=int, help="Número máximo de páginas para visitar")
     parser.add_argument("-l", "--login", action="store_true", help="Ativa o modo de login manual antes da varredura")
     parser.add_argument("-i", "--interactive", action="store_true", help="Inicia o modo interativo")
-    parser.add_argument("--mode", type=int, choices=[1, 2, 3], default=1, help="Modo de exploração: 1=Padrão, 2=Inteligente (Hash), 3=Guiado pelo Usuário")
+    parser.add_argument("--mode", type=int, choices=[1, 2], default=1, help="Modo de exploração: 1=Automático Inteligente, 2=Guiado pelo Usuário")
     
     args = parser.parse_args()
     
