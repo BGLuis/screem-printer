@@ -10,7 +10,11 @@ from datetime import datetime
 import shutil
 import copy
 import hashlib
+import questionary
+import questionary.prompts.common
 
+questionary.prompts.common.INDICATOR_SELECTED = "[x]"
+questionary.prompts.common.INDICATOR_UNSELECTED = "[ ]"
 # Carrega as configurações do arquivo config.json
 try:
     with open('config.json', 'r', encoding='utf-8') as f:
@@ -306,39 +310,27 @@ def menu_resolutions(active_resolutions):
     all_resolutions = CONFIG.get("resolutions", [])
     active_names = {r["name"] for r in active_resolutions}
     
-    while True:
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print("="*50)
-        print("Configurar Resoluções")
-        print("="*50)
-        
-        for i, res in enumerate(all_resolutions):
-            status = "[X]" if res["name"] in active_names else "[ ]"
-            print(f"[{i+1:2d}] {status} {res['name']} ({res['width']}x{res['height']})")
-            
-        print("-" * 50)
-        print("[T] Alternar todas")
-        print("[V] Voltar")
-        
-        choice = input("\nDigite o número para alternar, T para todas ou V para voltar: ").strip().upper()
-        
-        if choice == 'V':
-            break
-        elif choice == 'T':
-            if len(active_names) == len(all_resolutions):
-                active_names.clear()
-            else:
-                active_names = {r["name"] for r in all_resolutions}
-        elif choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(all_resolutions):
-                res_name = all_resolutions[idx]["name"]
-                if res_name in active_names:
-                    active_names.remove(res_name)
-                else:
-                    active_names.add(res_name)
+    choices = [
+        questionary.Choice(
+            title=f"{res['name']} ({res['width']}x{res['height']})",
+            value=res["name"],
+            checked=res["name"] in active_names
+        )
+        for res in all_resolutions
+    ]
+    
+    selected_names = questionary.checkbox(
+        "Selecione as resoluções desejadas (Use Espaço para marcar, Enter para confirmar):",
+        choices=choices,
+        style=questionary.Style([
+            ("selected", "fg:#00A2FF noreverse"),
+        ])
+    ).ask()
+    
+    if selected_names is None:
+        return active_resolutions
                     
-    return [r for r in all_resolutions if r["name"] in active_names]
+    return [r for r in all_resolutions if r["name"] in selected_names]
 
 def interactive_menu():
     active_resolutions = copy.deepcopy(CONFIG.get("resolutions", []))
@@ -363,38 +355,47 @@ def interactive_menu():
         print(f"Modo de Exploração: {modes_desc[mode]}")
         print(f"Resoluções ativas: {len(active_resolutions)} de {len(CONFIG.get('resolutions', []))}")
         print("-" * 50)
-        print("[1] Definir URL alvo")
-        print("[2] Configurar máximo de páginas")
-        print("[3] Configurar resoluções")
-        print("[4] Alternar necessidade de Login Manual")
-        print("[5] Alternar Modo de Exploração")
-        print("[6] Iniciar Varredura")
-        print("[0] Sair")
         
-        choice = input("\nEscolha uma opção: ").strip()
+        choice = questionary.select(
+            "Escolha uma opção:",
+            choices=[
+                "1. Definir URL alvo",
+                "2. Configurar máximo de páginas",
+                "3. Configurar resoluções",
+                "4. Alternar necessidade de Login Manual",
+                "5. Alternar Modo de Exploração",
+                "6. Iniciar Varredura",
+                "0. Sair"
+            ]
+        ).ask()
         
-        if choice == '1':
-            url = input("Digite a URL alvo (ex: https://exemplo.com): ").strip()
+        if choice is None or choice.startswith("0"):
+            sys.exit(0)
+        elif choice.startswith("1"):
+            url = questionary.text("Digite a URL alvo (ex: https://exemplo.com):").ask()
             if url:
-                target_url = url
-        elif choice == '2':
-            pages = input(f"Máximo de páginas (padrão {MAX_PAGES_DEFAULT}): ").strip()
-            if pages.isdigit():
+                target_url = url.strip()
+        elif choice.startswith("2"):
+            pages = questionary.text(f"Máximo de páginas (padrão {MAX_PAGES_DEFAULT}):").ask()
+            if pages and pages.isdigit():
                 max_pages = int(pages)
-        elif choice == '3':
+        elif choice.startswith("3"):
             active_resolutions = menu_resolutions(active_resolutions)
-        elif choice == '4':
+        elif choice.startswith("4"):
             login_required = not login_required
             print(f"\nLogin Manual {'ativado' if login_required else 'desativado'}.")
             input("Pressione ENTER para continuar...")
-        elif choice == '5':
-            print("\nModos disponíveis:")
-            for k, v in modes_desc.items():
-                print(f"[{k}] {v}")
-            m_choice = input("Escolha o modo (1 ou 2): ").strip()
-            if m_choice in ['1', '2']:
-                mode = int(m_choice)
-        elif choice == '6':
+        elif choice.startswith("5"):
+            mode_choice = questionary.select(
+                "Escolha o modo de exploração:",
+                choices=[
+                    questionary.Choice("1. " + modes_desc[1], value=1),
+                    questionary.Choice("2. " + modes_desc[2], value=2)
+                ]
+            ).ask()
+            if mode_choice is not None:
+                mode = mode_choice
+        elif choice.startswith("6"):
             if not target_url:
                 print("\nPor favor, defina a URL alvo primeiro (Opção 1).")
                 input("Pressione ENTER para continuar...")
@@ -404,8 +405,6 @@ def interactive_menu():
                 input("Pressione ENTER para continuar...")
                 continue
             break
-        elif choice == '0':
-            sys.exit(0)
             
     return target_url, max_pages, active_resolutions, login_required, mode
 
